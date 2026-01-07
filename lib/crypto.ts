@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 
 export function sha256(input: string) {
   return crypto.createHash("sha256").update(input).digest("hex");
@@ -9,7 +9,10 @@ export function randomToken(bytes = 32) {
 }
 
 export function hmacSign(payload: string, secret: string) {
-  return crypto.createHmac("sha256").update(payload).digest("hex");
+  return crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("hex");
 }
 
 export function timingSafeEqualHex(a: string, b: string) {
