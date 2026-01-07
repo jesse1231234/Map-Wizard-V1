@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+  sessions  Session[]
+  tokens    MagicLinkToken[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  wizardId  String
+  version   Int
+  status    String   @default("in_progress")
+  stepId    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  answers   Answer[]
+  feedback  Feedback[]
+  comments  Comment[]
+
+  @@index([userId])
+  @@index([wizardId, version])
+}
+
+model Answer {
+  id         String   @id @default(cuid())
+  sessionId  String
+  session    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  stepId     String
+  questionId String
+  version    Int      @default(1)
+  value      Json
+
+  createdAt  DateTime @default(now())
+
+  @@index([sessionId, stepId])
+  @@index([sessionId, stepId, questionId])
+}
+
+model Feedback {
+  id         String   @id @default(cuid())
+  sessionId  String
+  session    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  stepId     String
+  questionId String?
+  verdict    String
+  payload    Json
+
+  createdAt  DateTime @default(now())
+
+  @@index([sessionId, stepId])
+}
+
+model Rubric {
+  id        String   @id
+  wizardId  String
+  version   Int
+  stepId    String
+  json      Json
+  createdAt DateTime @default(now())
+
+  @@index([wizardId, version, stepId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  stepId    String
+  body      String
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, stepId])
+}
+
+model MagicLinkToken {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
