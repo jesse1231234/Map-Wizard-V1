@@ -19,7 +19,9 @@ async function loadWizardSteps(wizardId: string, version: number) {
 }
 
 export async function POST(req: Request) {
-  const cookie = cookies().get(getSessionCookieName())?.value;
+  const jar = await cookies();
+  const cookie = jar.get(getSessionCookieName())?.value;
+
   const auth = parseSessionCookieValue(cookie);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -57,17 +59,8 @@ export async function POST(req: Request) {
   };
 
   if (rubric) {
-    const context = {
-      wizardId: session.wizardId,
-      version: session.version
-    };
-
-    evaluation = await evaluateStep({
-      stepId,
-      rubric,
-      answers,
-      context
-    });
+    const context = { wizardId: session.wizardId, version: session.version };
+    evaluation = await evaluateStep({ stepId, rubric, answers, context });
   }
 
   await prisma.feedback.create({
@@ -79,10 +72,8 @@ export async function POST(req: Request) {
     }
   });
 
-  // default: keep current stepId at the submitted step
   let nextStepId: string | null = stepId;
 
-  // optional: auto-advance on pass
   const autoAdvance = process.env.AUTO_ADVANCE_ON_PASS === "true";
   if (autoAdvance && evaluation.step_pass) {
     const steps = await loadWizardSteps(session.wizardId, session.version);
