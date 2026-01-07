@@ -105,3 +105,15 @@ model MagicLinkToken {
   @@index([userId])
   @@index([expiresAt])
 }
+
+model WizardConfig {
+  id        String   @id
+  wizardId  String
+  version   Int
+  json      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([wizardId, version])
+}
+
