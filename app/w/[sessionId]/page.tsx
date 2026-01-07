@@ -178,6 +178,34 @@ export default function WizardSessionPage() {
     };
   }
 
+  async function loadStepState(targetStepId: string) {
+    const sRes = await fetch(`/api/session/${encodeURIComponent(sessionId)}`);
+    if (!sRes.ok) return;
+
+    const sJson = (await sRes.json()) as {
+      answers: Array<{ stepId: string; questionId: string; value: any; createdAt: string }>;
+      feedback: Array<{ stepId: string; payload: any; createdAt: string }>;
+    };
+
+    const stepAnswers = sJson.answers
+      .filter((a) => a.stepId === targetStepId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+    const latestByQuestion: Record<string, any> = {};
+    for (const a of stepAnswers) {
+      if (latestByQuestion[a.questionId] === undefined) {
+        latestByQuestion[a.questionId] = a.value;
+      }
+    }
+
+    const stepFeedback = sJson.feedback
+      .filter((f) => f.stepId === targetStepId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+    setAnswers(latestByQuestion);
+    setEvaluation(stepFeedback[0]?.payload ?? null);
+  }
+
   async function submitStep() {
     if (!currentStep) return;
     setStatus("submitting");
@@ -222,20 +250,23 @@ export default function WizardSessionPage() {
 
   function goPrev() {
     if (!canGoPrev) return;
-    setEvaluation(null);
+    const target = steps[currentStepIndex - 1].id;
+    setStepId(target);
     setAnswers({});
-    setStepId(steps[currentStepIndex - 1].id);
-    // NOTE: we’ll load persisted answers on navigation in a later refinement.
-    // For POC, navigation is clean-slate; refresh restores.
+    setEvaluation(null);
+    loadStepState(target);
   }
 
   function goNext() {
     if (!canGoNext) return;
     if (isHardGated && !evaluation?.step_pass) return;
-    setEvaluation(null);
+    const target = steps[currentStepIndex + 1].id;
+    setStepId(target);
     setAnswers({});
-    setStepId(steps[currentStepIndex + 1].id);
+    setEvaluation(null);
+    loadStepState(target);
   }
+
 
   function renderQuestion(q: any) {
     const val = answers[q.id];
