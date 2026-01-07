@@ -1,10 +1,17 @@
 import OpenAI from "openai";
 
-export const runtime = "nodejs";
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+type EvaluateStepArgs = {
+  stepId: string;
+  rubric: any;
+  answers: Array<{ questionId: string; value: any }>;
+  context: { wizardId: string; version: number };
+};
 
-export type StepEvalResult = {
+type StepEvaluation = {
   step_pass: boolean;
   global_feedback: string[];
   question_results: Array<{
@@ -13,78 +20,97 @@ export type StepEvalResult = {
     failed_checks: string[];
     feedback: string[];
     suggested_revision?: string;
-    scores?: Record<string, number>;
-    flags?: Record<string, string | boolean>;
   }>;
-  flags?: Record<string, string | boolean>;
 };
 
-export async function evaluateStep(args: {
-  stepId: string;
-  rubric: unknown;
-  answers: unknown;
-  context: unknown;
-}): Promise<StepEvalResult> {
-  const schema = {
-    type: "object",
-    additionalProperties: false,
-    required: ["step_pass", "global_feedback", "question_results"],
-    properties: {
-      step_pass: { type: "boolean" },
-      global_feedback: { type: "array", items: { type: "string" } },
-      question_results: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["question_id", "pass", "failed_checks", "feedback"],
-          properties: {
-            question_id: { type: "string" },
-            pass: { type: "boolean" },
-            failed_checks: { type: "array", items: { type: "string" } },
-            feedback: { type: "array", items: { type: "string" } },
-            suggested_revision: { type: "string" },
-            scores: { type: "object", additionalProperties: { type: "number" } },
-            flags: { type: "object", additionalProperties: { type: ["string", "boolean"] } }
-          }
-        }
-      },
-      flags: { type: "object", additionalProperties: { type: ["string", "boolean"] } }
+const StepEvaluationJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    step_pass: { type: "boolean" },
+    global_feedback: { type: "array", items: { type: "string" } },
+    question_results: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          question_id: { type: "string" },
+          pass: { type: "boolean" },
+          failed_checks: { type: "array", items: { type: "string" } },
+          feedback: { type: "array", items: { type: "string" } },
+          suggested_revision: { type: "string" }
+        },
+        required: ["question_id", "pass", "failed_checks", "feedback"]
+      }
     }
-  } as const;
+  },
+  required: ["step_pass", "global_feedback", "question_results"]
+} as const;
 
-  const prompt = [
-    "You are an instructional-design quality evaluator for a course-map wizard.",
-    "Evaluate the user's step answers against the provided rubric.",
-    "Be strict about required rubric checks but provide helpful, actionable feedback.",
-    "Return JSON ONLY matching the provided schema. No extra keys.",
-    "",
-    "STEP_ID:",
-    args.stepId,
-    "",
-    "RUBRIC_JSON:",
-    JSON.stringify(args.rubric),
-    "",
-    "SESSION_CONTEXT_JSON:",
-    JSON.stringify(args.context),
-    "",
-    "STEP_ANSWERS_JSON:",
-    JSON.stringify(args.answers)
-  ].join("\n");
+function buildPrompt(args: EvaluateStepArgs) {
+  return [
+    {
+      role: "system" as const,
+      content:
+        "You are an instructional design reviewer. Evaluate user answers against the provided rubric. " +
+        "Be strict when hard_gate is true. Return only structured JSON matching the schema."
+    },
+    {
+      role: "user" as const,
+      content: JSON.stringify(
+        {
+          task: "evaluate_step",
+          stepId: args.stepId,
+          context: args.context,
+          rubric: args.rubric,
+          answers: args.answers
+        },
+        null,
+        2
+      )
+    }
+  ];
+}
 
-  const resp = await client.responses.create({
-    model: "gpt-4.1-mini",
-    input: prompt,
-    response_format: {
-      type: "json_schema",
-      json_schema: {
+export async function evaluateStep(args: EvaluateStepArgs): Promise<StepEvaluation> {
+  const input = buildPrompt(args);
+
+  // NOTE: Structured outputs for Responses API uses text.format, not response_format.
+  const resp = await openai.responses.create({
+    model: "gpt-4o-mini",
+    input,
+    text: {
+      format: {
+        type: "json_schema",
         name: "step_evaluation",
-        schema
+        strict: true,
+        schema: StepEvaluationJsonSchema
       }
     }
   });
 
-  // With json_schema, output_text should be a valid JSON string.
-  const text = resp.output_text;
-  return JSON.parse(text) as StepEvalResult;
+  // openai-node provides resp.output_text in many examples; fall back safely if missing
+  const outputText =
+    (resp as any).output_text ??
+    (Array.isArray((resp as any).output)
+      ? (resp as any).output
+          .flatMap((o: any) => o?.content ?? [])
+          .filter((c: any) => c?.type === "output_text")
+          .map((c: any) => c?.text)
+          .join("")
+      : "");
+
+  if (!outputText || typeof outputText !== "string") {
+    throw new Error("Model returned empty output_text");
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch {
+    throw new Error("Model output was not valid JSON");
+  }
+
+  return parsed as StepEvaluation;
 }
