@@ -36,6 +36,17 @@ function mdToPlain(md?: string) {
     .trim();
 }
 
+function getByPath(obj: any, path: string) {
+  // supports paths like "s1_outcomes.outcomes_list"
+  const parts = path.split(".").filter(Boolean);
+  let cur: any = obj;
+  for (const p of parts) {
+    if (cur == null) return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
 export default function WizardSessionPage() {
   const params = useParams<{ sessionId: string }>();
   const sessionId = params.sessionId;
@@ -184,6 +195,122 @@ export default function WizardSessionPage() {
         const next = items.map((it, i) => (i === index ? { ...(it ?? {}), [fieldId]: fieldValue } : it));
         setAnswers((a) => ({ ...a, [q.id]: next }));
       }
+
+    if (q.type === "matrix") {
+      const matrixVal: any[] = Array.isArray(val) ? val : [];
+
+      // derive rows from prior answers per config
+      const rowsFrom = q.ui?.rows_from_answer as string | undefined;
+      const rowLabelField = q.ui?.row_label_field as string | undefined;
+
+      const sourceItems: any[] = Array.isArray(getByPath(answers, rowsFrom ?? ""))
+        ? (getByPath(answers, rowsFrom ?? "") as any[])
+        : [];
+
+      // build a stable row list
+      const rows = sourceItems.map((it, idx) => {
+        const label = rowLabelField ? it?.[rowLabelField] : undefined;
+        return {
+          row_key: String(idx),
+          row_label: (label ?? `Row ${idx + 1}`) as string
+        };
+      });
+
+      // Ensure matrix has an entry per row
+      const normalized = rows.map((r) => {
+        const existing = matrixVal.find((m) => m?.row_key === r.row_key);
+        return existing ?? { row_key: r.row_key, row_label: r.row_label };
+      });
+
+      function setCell(rowKey: string, colId: string, value: any) {
+        const next = normalized.map((r) => (r.row_key === rowKey ? { ...r, [colId]: value } : r));
+        setAnswers((a) => ({ ...a, [q.id]: next }));
+      }
+
+      // write back normalized if different length (keeps it in sync after outcome edits)
+      if (matrixVal.length !== normalized.length) {
+        // avoid infinite loop; only set once when mismatch
+        queueMicrotask(() => setAnswers((a) => ({ ...a, [q.id]: normalized })));
+      }
+
+      return (
+        <div className="overflow-x-auto rounded-lg border border-neutral-200">
+          <table className="w-full border-collapse text-sm">
+            <thead className="bg-neutral-50">
+              <tr>
+                <th className="w-[220px] border-b border-neutral-200 p-2 text-left text-xs font-medium text-neutral-600">
+                  Outcome
+                </th>
+                {(q.columns ?? []).map((c: any) => (
+                  <th
+                    key={c.id}
+                    className="border-b border-neutral-200 p-2 text-left text-xs font-medium text-neutral-600"
+                  >
+                    {c.label}
+                    {c.required ? <span className="text-red-600"> *</span> : null}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+
+            <tbody>
+              {normalized.map((r) => (
+                <tr key={r.row_key} className="align-top">
+                  <td className="border-b border-neutral-200 p-2 text-xs text-neutral-700">
+                    {r.row_label}
+                  </td>
+
+                  {(q.columns ?? []).map((c: any) => {
+                    const cellVal = r?.[c.id] ?? "";
+
+                    if (c.type === "short_text") {
+                      return (
+                        <td key={c.id} className="border-b border-neutral-200 p-2">
+                          <input
+                            className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                            value={cellVal}
+                            onChange={(e) => setCell(r.row_key, c.id, e.target.value)}
+                            placeholder={c.ui?.placeholder ?? ""}
+                          />
+                        </td>
+                      );
+                    }
+
+                    if (c.type === "long_text") {
+                      return (
+                        <td key={c.id} className="border-b border-neutral-200 p-2">
+                          <textarea
+                            className="w-full min-h-[90px] rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                            value={cellVal}
+                            onChange={(e) => setCell(r.row_key, c.id, e.target.value)}
+                            placeholder={c.ui?.placeholder ?? ""}
+                          />
+                        </td>
+                      );
+                    }
+
+                    return (
+                      <td key={c.id} className="border-b border-neutral-200 p-2">
+                        <div className="rounded-md border border-neutral-200 bg-neutral-50 p-2 text-xs text-neutral-700">
+                          Unsupported column type: <span className="font-mono">{c.type}</span>
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {rows.length === 0 && (
+            <div className="p-3 text-xs text-neutral-600">
+              Add outcomes in the previous step to populate this table.
+            </div>
+          )}
+        </div>
+      );
+    }
+
 
       function addItem() {
         if (items.length >= maxItems) return;
