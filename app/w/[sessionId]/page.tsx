@@ -65,21 +65,60 @@ export default function WizardSessionPage() {
       setStatus("loading");
       setError(null);
 
-      const res = await fetch("/api/wizard?wizardId=course_map_v1&version=1");
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
+      // 1) Load wizard config
+      const cfgRes = await fetch("/api/wizard?wizardId=course_map_v1&version=1");
+      if (!cfgRes.ok) {
+        const j = await cfgRes.json().catch(() => ({}));
         setStatus("error");
         setError(j?.error ?? "Failed to load wizard config");
         return;
       }
-      const j = (await res.json()) as { config: WizardConfig };
-      setCfg(j.config);
+      const cfgJson = (await cfgRes.json()) as { config: WizardConfig };
+      setCfg(cfgJson.config);
+
+      // 2) Load session state
+      const sRes = await fetch(`/api/session/${encodeURIComponent(sessionId)}`);
+      if (!sRes.ok) {
+        const j = await sRes.json().catch(() => ({}));
+        setStatus("error");
+        setError(j?.error ?? "Failed to load session");
+        return;
+      }
+      const sJson = (await sRes.json()) as {
+        session: { stepId?: string | null };
+        answers: Array<{ stepId: string; questionId: string; value: any; createdAt: string }>;
+        feedback: Array<{ stepId: string; payload: any; createdAt: string }>;
+      };
+
+      const initialStep = sJson.session.stepId ?? "s0_context";
+      setStepId(initialStep);
+
+      // pick latest answer per questionId for that step
+      const stepAnswers = sJson.answers
+        .filter((a) => a.stepId === initialStep)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+      const latestByQuestion: Record<string, any> = {};
+      for (const a of stepAnswers) {
+        if (latestByQuestion[a.questionId] === undefined) {
+          latestByQuestion[a.questionId] = a.value;
+        }
+      }
+      setAnswers(latestByQuestion);
+
+      // pick latest feedback for that step
+      const stepFeedback = sJson.feedback
+        .filter((f) => f.stepId === initialStep)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+      setEvaluation(stepFeedback[0]?.payload ?? null);
 
       setStatus("ready");
     }
 
     load();
-  }, []);
+  }, [sessionId]);
+
 
   const steps = cfg?.steps ?? [];
   const currentStep = useMemo(() => steps.find((s) => s.id === stepId) ?? steps[0], [steps, stepId]);
@@ -176,6 +215,8 @@ export default function WizardSessionPage() {
     setEvaluation(null);
     setAnswers({});
     setStepId(steps[currentStepIndex - 1].id);
+    // NOTE: we’ll load persisted answers on navigation in a later refinement.
+    // For POC, navigation is clean-slate; refresh restores.
   }
 
   function goNext() {
