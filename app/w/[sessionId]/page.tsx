@@ -54,7 +54,6 @@ export default function WizardSessionPage() {
       setStatus("loading");
       setError(null);
 
-      // Load wizard config from DB
       const res = await fetch("/api/wizard?wizardId=course_map_v1&version=1");
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -84,7 +83,6 @@ export default function WizardSessionPage() {
   const canGoNext = currentStepIndex < steps.length - 1;
 
   const isHardGated = currentStep?.gate?.mode === "hard";
-  const stepPassed = evaluation?.step_pass === true || !isHardGated;
 
   async function submitStep() {
     if (!currentStep) return;
@@ -134,13 +132,13 @@ export default function WizardSessionPage() {
   }
 
   function renderQuestion(q: any) {
-    const val = answers[q.id] ?? "";
+    const val = answers[q.id];
 
     if (q.type === "short_text") {
       return (
         <input
           className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
-          value={val}
+          value={(val ?? "") as string}
           onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}
           placeholder={q.ui?.placeholder ?? ""}
         />
@@ -151,7 +149,7 @@ export default function WizardSessionPage() {
       return (
         <textarea
           className="w-full min-h-[120px] rounded-md border border-neutral-300 px-3 py-2 text-sm"
-          value={val}
+          value={(val ?? "") as string}
           onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}
           placeholder={q.ui?.placeholder ?? ""}
         />
@@ -162,7 +160,7 @@ export default function WizardSessionPage() {
       return (
         <select
           className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
-          value={val}
+          value={(val ?? "") as string}
           onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}
         >
           <option value="" disabled>
@@ -177,7 +175,148 @@ export default function WizardSessionPage() {
       );
     }
 
-    // POC: we’ll implement repeat_group, matrix, file in the next files.
+    if (q.type === "repeat_group") {
+      const items: any[] = Array.isArray(val) ? val : [];
+      const minItems = q.ui?.min_items ?? 0;
+      const maxItems = q.ui?.max_items ?? 50;
+
+      function setItem(index: number, fieldId: string, fieldValue: any) {
+        const next = items.map((it, i) => (i === index ? { ...(it ?? {}), [fieldId]: fieldValue } : it));
+        setAnswers((a) => ({ ...a, [q.id]: next }));
+      }
+
+      function addItem() {
+        if (items.length >= maxItems) return;
+        const empty: Record<string, any> = {};
+        for (const f of q.fields ?? []) empty[f.id] = "";
+        setAnswers((a) => ({ ...a, [q.id]: [...items, empty] }));
+      }
+
+      function removeItem(index: number) {
+        const next = items.filter((_, i) => i !== index);
+        setAnswers((a) => ({ ...a, [q.id]: next }));
+      }
+
+      return (
+        <div className="space-y-3">
+          {items.length === 0 && (
+            <p className="text-xs text-neutral-600">
+              Add {minItems > 0 ? `at least ${minItems}` : "an item"}.
+            </p>
+          )}
+
+          {items.map((item, idx) => (
+            <div key={idx} className="space-y-2 rounded-lg border border-neutral-200 p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-neutral-600">Item {idx + 1}</p>
+                <button
+                  className="text-xs underline disabled:opacity-50"
+                  onClick={() => removeItem(idx)}
+                  disabled={items.length <= minItems}
+                  type="button"
+                >
+                  Remove
+                </button>
+              </div>
+
+              {(q.fields ?? []).map((f: any) => {
+                const fVal = item?.[f.id] ?? "";
+
+                if (f.type === "short_text") {
+                  return (
+                    <label key={f.id} className="block space-y-1">
+                      <span className="text-xs text-neutral-700">
+                        {f.label} {f.required ? <span className="text-red-600">*</span> : null}
+                      </span>
+                      <input
+                        className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                        value={fVal}
+                        onChange={(e) => setItem(idx, f.id, e.target.value)}
+                        placeholder={f.ui?.placeholder ?? ""}
+                      />
+                    </label>
+                  );
+                }
+
+                if (f.type === "long_text") {
+                  return (
+                    <label key={f.id} className="block space-y-1">
+                      <span className="text-xs text-neutral-700">
+                        {f.label} {f.required ? <span className="text-red-600">*</span> : null}
+                      </span>
+                      <textarea
+                        className="w-full min-h-[100px] rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                        value={fVal}
+                        onChange={(e) => setItem(idx, f.id, e.target.value)}
+                        placeholder={f.ui?.placeholder ?? ""}
+                      />
+                    </label>
+                  );
+                }
+
+                if (f.type === "single_select") {
+                  return (
+                    <label key={f.id} className="block space-y-1">
+                      <span className="text-xs text-neutral-700">
+                        {f.label} {f.required ? <span className="text-red-600">*</span> : null}
+                      </span>
+                      <select
+                        className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                        value={fVal}
+                        onChange={(e) => setItem(idx, f.id, e.target.value)}
+                      >
+                        <option value="" disabled>
+                          Select…
+                        </option>
+                        {(f.options ?? []).map((opt: any) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                }
+
+                if (f.type === "url") {
+                  return (
+                    <label key={f.id} className="block space-y-1">
+                      <span className="text-xs text-neutral-700">
+                        {f.label} {f.required ? <span className="text-red-600">*</span> : null}
+                      </span>
+                      <input
+                        className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                        value={fVal}
+                        onChange={(e) => setItem(idx, f.id, e.target.value)}
+                        placeholder={f.ui?.placeholder ?? "https://"}
+                      />
+                    </label>
+                  );
+                }
+
+                // file support comes next
+                return (
+                  <div key={f.id} className="rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm">
+                    Unsupported field type in repeat_group: <span className="font-mono">{f.type}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+
+          <button
+            className="rounded-md border px-3 py-2 text-sm disabled:opacity-50"
+            onClick={addItem}
+            disabled={items.length >= maxItems}
+            type="button"
+          >
+            {q.ui?.add_label ?? "Add item"}
+          </button>
+        </div>
+      );
+    }
+
+    // POC: we’ll implement matrix + file next.
     return (
       <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm text-neutral-700">
         Unsupported question type in UI POC: <span className="font-mono">{q.type}</span>
@@ -194,7 +333,11 @@ export default function WizardSessionPage() {
       <main className="space-y-4">
         <h1 className="text-xl font-semibold">Wizard</h1>
         <p className="text-sm text-red-600">{error ?? "Something went wrong."}</p>
-        <button className="rounded-md border px-3 py-2 text-sm" onClick={() => router.replace("/")}>
+        <button
+          className="rounded-md border px-3 py-2 text-sm"
+          onClick={() => router.replace("/")}
+          type="button"
+        >
           Back home
         </button>
       </main>
@@ -230,6 +373,7 @@ export default function WizardSessionPage() {
                 className="rounded-md border px-3 py-2 text-sm disabled:opacity-50"
                 onClick={goPrev}
                 disabled={!canGoPrev || status === "submitting"}
+                type="button"
               >
                 Back
               </button>
@@ -237,6 +381,7 @@ export default function WizardSessionPage() {
                 className="rounded-md bg-neutral-900 px-3 py-2 text-sm text-white disabled:opacity-50"
                 onClick={submitStep}
                 disabled={status === "submitting"}
+                type="button"
               >
                 {status === "submitting" ? "Submitting…" : "Submit for feedback"}
               </button>
@@ -245,6 +390,7 @@ export default function WizardSessionPage() {
                 onClick={goNext}
                 disabled={!canGoNext || (isHardGated && !evaluation?.step_pass)}
                 title={isHardGated && !evaluation?.step_pass ? "Submit and pass to continue" : ""}
+                type="button"
               >
                 Next
               </button>
