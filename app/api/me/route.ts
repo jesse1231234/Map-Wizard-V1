@@ -6,7 +6,9 @@ import { parseSessionCookieValue, getSessionCookieName } from "@/lib/auth";
 export const runtime = "nodejs";
 
 export async function GET() {
-  const cookie = cookies().get(getSessionCookieName())?.value;
+  const jar = await cookies();
+  const cookie = jar.get(getSessionCookieName())?.value;
+
   const auth = parseSessionCookieValue(cookie);
   if (!auth) return NextResponse.json({ signedIn: false });
 
