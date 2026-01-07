@@ -594,7 +594,7 @@ export default function WizardSessionPage() {
                               setItem(idx, f.id, { uploading: true, filename: file.name, size: file.size });
 
                               const meta = await uploadFile({
-                                stepId: currentStep.id,
+                                stepId, // use state instead of possibly-undefined currentStep
                                 questionId: q.id,
                                 fieldId: f.id,
                                 file
