@@ -95,6 +95,50 @@ export default function WizardSessionPage() {
 
   const isHardGated = currentStep?.gate?.mode === "hard";
 
+  async function uploadFile(args: {
+    stepId: string;
+    questionId: string; // parent question id (repeat_group)
+    fieldId: string; // file field id within repeat_group
+    file: File;
+  }) {
+    const res = await fetch("/api/upload/url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        stepId: args.stepId,
+        questionId: `${args.questionId}.${args.fieldId}`,
+        filename: args.file.name,
+        contentType: args.file.type || "application/octet-stream"
+      })
+    });
+
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j?.error ?? "Failed to create upload URL");
+    }
+
+    const j = (await res.json()) as { bucket: string; key: string; putUrl: string };
+
+    const put = await fetch(j.putUrl, {
+      method: "PUT",
+      headers: { "Content-Type": args.file.type || "application/octet-stream" },
+      body: args.file
+    });
+
+    if (!put.ok) {
+      throw new Error("Upload failed");
+    }
+
+    return {
+      bucket: j.bucket,
+      key: j.key,
+      filename: args.file.name,
+      contentType: args.file.type || "application/octet-stream",
+      size: args.file.size
+    };
+  }
+
   async function submitStep() {
     if (!currentStep) return;
     setStatus("submitting");
@@ -422,11 +466,77 @@ export default function WizardSessionPage() {
                 }
 
                 // file support comes next
+                if (f.type === "file") {
+                  const uploaded = fVal && typeof fVal === "object" ? fVal : null;
+
+                  return (
+                    <div key={f.id} className="space-y-1">
+                      <div className="text-xs text-neutral-700">
+                        {f.label} {f.required ? <span className="text-red-600">*</span> : null}
+                      </div>
+
+                      {uploaded ? (
+                        <div className="flex items-center justify-between rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm">{uploaded.filename ?? "Uploaded file"}</div>
+                            <div className="text-xs text-neutral-500">
+                              {uploaded.contentType ?? "file"} • {uploaded.size ?? "?"} bytes
+                            </div>
+                          </div>
+
+                          <button
+                            className="text-xs underline"
+                            type="button"
+                            onClick={() => setItem(idx, f.id, null)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : (
+                        <input
+                          className="block w-full text-sm"
+                          type="file"
+                          accept={Array.isArray(f.ui?.accept) ? f.ui.accept.join(",") : undefined}
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            try {
+                              // optimistic placeholder
+                              setItem(idx, f.id, { uploading: true, filename: file.name, size: file.size });
+
+                              const meta = await uploadFile({
+                                stepId: currentStep.id,
+                                questionId: q.id,
+                                fieldId: f.id,
+                                file
+                              });
+
+                              setItem(idx, f.id, meta);
+                            } catch (err: any) {
+                              setItem(idx, f.id, null);
+                              setError(err?.message ?? "Upload failed");
+                              setStatus("error");
+                            } finally {
+                              // allow selecting same file again if needed
+                              e.currentTarget.value = "";
+                            }
+                          }}
+                        />
+                      )}
+
+                      <div className="text-[11px] text-neutral-500">
+                        Uploads go directly to S3 using a presigned URL.
+                      </div>
+                    </div>
+                  );
+                }
+
                 return (
                   <div key={f.id} className="rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm">
                     Unsupported field type in repeat_group: <span className="font-mono">{f.type}</span>
                   </div>
                 );
+
               })}
             </div>
           ))}
