@@ -7,10 +7,15 @@ import { evaluateStep } from "@/lib/llm/evaluator";
 
 export const runtime = "nodejs";
 
-// POC: rubrics stored in DB table Rubric (one row per step).
 async function loadRubric(wizardId: string, version: number, stepId: string) {
   const r = await prisma.rubric.findFirst({ where: { wizardId, version, stepId } });
   return r?.json ?? null;
+}
+
+async function loadWizardSteps(wizardId: string, version: number) {
+  const cfg = await prisma.wizardConfig.findUnique({ where: { id: `${wizardId}:${version}` } });
+  const steps = (cfg?.json as any)?.steps;
+  return Array.isArray(steps) ? steps : [];
 }
 
 export async function POST(req: Request) {
@@ -34,7 +39,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Save answers (simple POC: always append; you can add versioning later).
   await prisma.answer.createMany({
     data: answers.map((a) => ({
       sessionId,
@@ -46,7 +50,6 @@ export async function POST(req: Request) {
 
   const rubric = await loadRubric(session.wizardId, session.version, stepId);
 
-  // If no rubric found, treat as pass (for non-gated steps)
   let evaluation: any = {
     step_pass: true,
     global_feedback: [],
@@ -76,11 +79,27 @@ export async function POST(req: Request) {
     }
   });
 
-  // Keep stepId updated (UI controls actual step navigation)
+  // default: keep current stepId at the submitted step
+  let nextStepId: string | null = stepId;
+
+  // optional: auto-advance on pass
+  const autoAdvance = process.env.AUTO_ADVANCE_ON_PASS === "true";
+  if (autoAdvance && evaluation.step_pass) {
+    const steps = await loadWizardSteps(session.wizardId, session.version);
+    const idx = steps.findIndex((s: any) => s?.id === stepId);
+    if (idx >= 0 && idx < steps.length - 1) {
+      nextStepId = steps[idx + 1]?.id ?? stepId;
+    }
+  }
+
   await prisma.session.update({
     where: { id: sessionId },
-    data: { stepId }
+    data: { stepId: nextStepId }
   });
 
-  return NextResponse.json({ ok: true, evaluation });
+  return NextResponse.json({
+    ok: true,
+    evaluation,
+    session: { stepId: nextStepId }
+  });
 }
