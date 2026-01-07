@@ -205,9 +205,19 @@ export default function WizardSessionPage() {
       return;
     }
 
-    const j = (await res.json()) as { evaluation: StepEvaluation };
+    const j = (await res.json()) as { evaluation: StepEvaluation; session?: { stepId?: string | null } };
     setEvaluation(j.evaluation);
+
+    // If backend auto-advanced the step, reflect it.
+    const serverStepId = j.session?.stepId ?? null;
+    if (serverStepId && serverStepId !== currentStep.id) {
+      setAnswers({});
+      setEvaluation(null);
+      setStepId(serverStepId);
+    }
+
     setStatus("ready");
+
   }
 
   function goPrev() {
