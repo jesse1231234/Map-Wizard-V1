@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma";
+import { wizardConfigV1 } from "../lib/wizard/config";
 
 const wizardId = "course_map_v1";
 const version = 1;
@@ -86,28 +87,34 @@ const rubrics: RubricRow[] = [
 ];
 
 async function main() {
+  // Seed wizard config
+  await prisma.wizardConfig.upsert({
+    where: { id: `${wizardId}:${version}` },
+    update: {
+      wizardId,
+      version,
+      json: wizardConfigV1 as any
+    },
+    create: {
+      id: `${wizardId}:${version}`,
+      wizardId,
+      version,
+      json: wizardConfigV1 as any
+    }
+  });
+
+  // Seed rubrics
   for (const r of rubrics) {
     const id = `${wizardId}:${version}:${r.stepId}`;
     await prisma.rubric.upsert({
       where: { id },
-      update: {
-        wizardId,
-        version,
-        stepId: r.stepId,
-        json: r.json
-      },
-      create: {
-        id,
-        wizardId,
-        version,
-        stepId: r.stepId,
-        json: r.json
-      }
+      update: { wizardId, version, stepId: r.stepId, json: r.json },
+      create: { id, wizardId, version, stepId: r.stepId, json: r.json }
     });
   }
 
   // eslint-disable-next-line no-console
-  console.log(`Seeded ${rubrics.length} rubrics for ${wizardId} v${version}`);
+  console.log(`Seeded wizard config + ${rubrics.length} rubrics for ${wizardId} v${version}`);
 }
 
 main()
