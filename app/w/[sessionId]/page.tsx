@@ -250,7 +250,10 @@ export default function WizardSessionPage() {
 
   function goPrev() {
     if (!canGoPrev) return;
-    const target = steps[currentStepIndex - 1].id;
+    const prev = steps[currentStepIndex - 1];
+    if (!prev) return;
+
+    const target = prev.id;
     setStepId(target);
     setAnswers({});
     setEvaluation(null);
@@ -260,7 +263,11 @@ export default function WizardSessionPage() {
   function goNext() {
     if (!canGoNext) return;
     if (isHardGated && !evaluation?.step_pass) return;
-    const target = steps[currentStepIndex + 1].id;
+
+    const next = steps[currentStepIndex + 1];
+    if (!next) return;
+
+    const target = next.id;
     setStepId(target);
     setAnswers({});
     setEvaluation(null);
