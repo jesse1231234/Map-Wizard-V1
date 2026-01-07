@@ -7,7 +7,7 @@ const openai = new OpenAI({
 type EvaluateStepArgs = {
   stepId: string;
   rubric: any;
-  answers: Array<{ questionId: string; value: any }>;
+  answers: Array<{ questionId: string; value?: any }>;
   context: { wizardId: string; version: number };
 };
 
@@ -64,7 +64,10 @@ function buildPrompt(args: EvaluateStepArgs) {
           stepId: args.stepId,
           context: args.context,
           rubric: args.rubric,
-          answers: args.answers
+          answers: args.answers.map((a) => ({
+            questionId: a.questionId,
+            value: a.value ?? null
+          }))
         },
         null,
         2
