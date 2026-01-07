@@ -5,12 +5,15 @@ import { parseSessionCookieValue, getSessionCookieName } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(_req: Request, context: any) {
   const cookie = cookies().get(getSessionCookieName())?.value;
   const auth = parseSessionCookieValue(cookie);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const sessionId = params.id;
+  const sessionId = context?.params?.id;
+  if (typeof sessionId !== "string" || sessionId.length < 5) {
+    return NextResponse.json({ error: "Invalid session id" }, { status: 400 });
+  }
 
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
