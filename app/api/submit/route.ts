@@ -1,32 +1,41 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { SubmitStepSchema } from "@/lib/validators";
-import { parseSessionCookieValue, getSessionCookieName } from "@/lib/auth";
-import { evaluateStep } from "@/lib/llm/evaluator";
+import { getAuthedUserId } from "@/lib/authServer";
+import { z } from "zod";
+
+// Adjust this import to whatever your repo uses for rubric evaluation
+import { evaluateStep } from "@/lib/llm/evaluate";
 
 export const runtime = "nodejs";
 
-async function loadRubric(wizardId: string, version: number, stepId: string) {
-  const r = await prisma.rubric.findFirst({ where: { wizardId, version, stepId } });
-  return r?.json ?? null;
-}
+const SubmitSchema = z.object({
+  sessionId: z.string().min(1),
+  stepId: z.string().min(1),
 
-async function loadWizardSteps(wizardId: string, version: number) {
-  const cfg = await prisma.wizardConfig.findUnique({ where: { id: `${wizardId}:${version}` } });
-  const steps = (cfg?.json as any)?.steps;
-  return Array.isArray(steps) ? steps : [];
-}
+  // answers: array so you can submit multiple questions at once
+  answers: z
+    .array(
+      z.object({
+        questionId: z.string().min(1),
+        valueJson: z.any(),
+      })
+    )
+    .default([]),
+
+  // navigation intent
+  nextStepId: z.string().min(1).optional(),
+  markComplete: z.boolean().optional(),
+});
 
 export async function POST(req: Request) {
-  const jar = await cookies();
-  const cookie = jar.get(getSessionCookieName())?.value;
-
-  const auth = parseSessionCookieValue(cookie);
-  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Auth (bypass-aware)
+  const userId = await getAuthedUserId();
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const json = await req.json().catch(() => null);
-  const parsed = SubmitStepSchema.safeParse(json);
+  const parsed = SubmitSchema.safeParse(json);
   if (!parsed.success) {
     return NextResponse.json(
       { error: "Invalid request", details: parsed.error.flatten() },
@@ -34,63 +43,130 @@ export async function POST(req: Request) {
     );
   }
 
-  const { sessionId, stepId, answers } = parsed.data;
+  const { sessionId, stepId, answers, nextStepId, markComplete } = parsed.data;
 
-  const session = await prisma.session.findUnique({ where: { id: sessionId } });
-  if (!session || session.userId !== auth.userId) {
+  // Ensure session belongs to user
+  const session = await prisma.session.findFirst({
+    where: { id: sessionId, userId },
+    select: { id: true, wizardId: true, version: true, status: true, stepId: true },
+  });
+
+  if (!session) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  await prisma.answer.createMany({
-    data: answers.map((a) => ({
-      sessionId,
+  // Upsert answers for this step
+  // (Your schema uses unique(sessionId, stepId, questionId) or similar; if not, adjust.)
+  await prisma.$transaction(
+    answers.map((a) =>
+      prisma.answer.upsert({
+        where: {
+          sessionId_stepId_questionId: {
+            sessionId,
+            stepId,
+            questionId: a.questionId,
+          },
+        },
+        update: { valueJson: a.valueJson },
+        create: {
+          sessionId,
+          stepId,
+          questionId: a.questionId,
+          valueJson: a.valueJson,
+        },
+      })
+    )
+  );
+
+  // Load rubric for gating (if any)
+  const rubric = await prisma.rubric.findFirst({
+    where: {
+      wizardId: session.wizardId,
+      version: session.version,
       stepId,
-      questionId: a.questionId,
-      value: a.value
-    }))
+    },
+    select: { id: true, rubricJson: true },
   });
 
-  const rubric = await loadRubric(session.wizardId, session.version, stepId);
+  // Clear prior feedback for this step (optional but usually desired)
+  await prisma.feedback.deleteMany({ where: { sessionId, stepId } });
 
-  let evaluation: any = {
-    step_pass: true,
-    global_feedback: [],
-    question_results: []
-  };
+  let evalResult: any = null;
 
   if (rubric) {
-    const context = { wizardId: session.wizardId, version: session.version };
-    evaluation = await evaluateStep({ stepId, rubric, answers, context });
-  }
+    // Gather current answers for this step
+    const stepAnswers = await prisma.answer.findMany({
+      where: { sessionId, stepId },
+      select: { questionId: true, valueJson: true },
+    });
 
-  await prisma.feedback.create({
-    data: {
-      sessionId,
+    // Evaluate against rubric (may call LLM)
+    evalResult = await evaluateStep({
+      wizardId: session.wizardId,
+      version: session.version,
       stepId,
-      verdict: evaluation.step_pass ? "pass" : "fail",
-      payload: evaluation
+      rubric: rubric.rubricJson,
+      answers: stepAnswers,
+    });
+
+    // Persist feedback items if returned
+    const items = Array.isArray(evalResult?.items) ? evalResult.items : [];
+    if (items.length > 0) {
+      await prisma.feedback.createMany({
+        data: items.map((it: any) => ({
+          sessionId,
+          stepId,
+          kind: it.kind ?? "rubric",
+          severity: it.severity ?? "info",
+          message: it.message ?? "",
+        })),
+      });
     }
-  });
 
-  let nextStepId: string | null = stepId;
+    // Gate advancement if rubric says not pass
+    const passed = evalResult?.passed === true;
 
-  const autoAdvance = process.env.AUTO_ADVANCE_ON_PASS === "true";
-  if (autoAdvance && evaluation.step_pass) {
-    const steps = await loadWizardSteps(session.wizardId, session.version);
-    const idx = steps.findIndex((s: any) => s?.id === stepId);
-    if (idx >= 0 && idx < steps.length - 1) {
-      nextStepId = steps[idx + 1]?.id ?? stepId;
+    if (!passed) {
+      // Stay on same step; return feedback
+      const feedback = await prisma.feedback.findMany({
+        where: { sessionId, stepId },
+        orderBy: { createdAt: "asc" },
+      });
+
+      return NextResponse.json({
+        ok: true,
+        gated: true,
+        passed: false,
+        nextStepId: stepId,
+        evaluation: evalResult,
+        feedback,
+      });
     }
   }
+
+  // Passed (or no rubric) => advance/update session
+  const newStatus = markComplete ? "complete" : session.status;
+  const newStepId = markComplete ? session.stepId : (nextStepId ?? session.stepId);
 
   await prisma.session.update({
     where: { id: sessionId },
-    data: { stepId: nextStepId }
+    data: {
+      status: newStatus,
+      stepId: newStepId,
+    },
+  });
+
+  const feedback = await prisma.feedback.findMany({
+    where: { sessionId, stepId },
+    orderBy: { createdAt: "asc" },
   });
 
   return NextResponse.json({
     ok: true,
-    evaluation,
-    session: { stepId: nextStepId }
+    gated: false,
+    passed: true,
+    nextStepId: newStepId,
+    evaluation: evalResult,
+    feedback,
   });
 }
