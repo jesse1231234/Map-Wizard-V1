@@ -1,12 +1,38 @@
+// app/api/auth/verify/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { VerifyMagicLinkSchema } from "@/lib/validators";
 import { sha256 } from "@/lib/crypto";
-import { createSessionCookieValue, sessionCookieHeader } from "@/lib/auth";
+import { buildSessionCookie, getSessionCookieName } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
+function normalize(v: string | undefined) {
+  return (v ?? "").trim().toLowerCase();
+}
+function bypassEnabled() {
+  const v = process.env.AUTH_BYPASS;
+  if (v === undefined) return true; // ON by default in your current testing stance
+  const s = normalize(v);
+  if (s === "0" || s === "false" || s === "no" || s === "off") return false;
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
+// Some projects call this endpoint via GET from the verify page.
+// If yours doesn't, keeping GET harmless avoids surprises.
+export async function GET() {
+  if (bypassEnabled()) {
+    return NextResponse.json({ ok: true, bypass: true });
+  }
+  return NextResponse.json({ error: "Method not supported" }, { status: 405 });
+}
+
 export async function POST(req: Request) {
+  // Global bypass: pretend verification succeeded; do not set cookies.
+  if (bypassEnabled()) {
+    return NextResponse.json({ ok: true, bypass: true });
+  }
+
   const json = await req.json().catch(() => null);
   const parsed = VerifyMagicLinkSchema.safeParse(json);
 
@@ -17,28 +43,30 @@ export async function POST(req: Request) {
     );
   }
 
-  const tokenHash = sha256(parsed.data.token);
+  const { token } = parsed.data;
 
-  const record = await prisma.magicLinkToken.findUnique({
+  const tokenHash = sha256(token);
+
+  const row = await prisma.magicLinkToken.findFirst({
     where: { tokenHash },
-    include: { user: true }
+    select: { id: true, userId: true, expiresAt: true },
   });
 
-  if (!record || record.usedAt || record.expiresAt.getTime() < Date.now()) {
-    return NextResponse.json({ error: "Invalid or expired token" }, { status: 401 });
+  if (!row) {
+    return NextResponse.json({ error: "Invalid or expired token" }, { status: 400 });
   }
 
-  await prisma.magicLinkToken.update({
-    where: { tokenHash },
-    data: { usedAt: new Date() }
-  });
+  if (row.expiresAt.getTime() < Date.now()) {
+    return NextResponse.json({ error: "Invalid or expired token" }, { status: 400 });
+  }
 
-  const cookieVal = createSessionCookieValue({
-    userId: record.userId,
-    exp: Date.now() + 7 * 24 * 3600 * 1000
-  });
+  // Consume token
+  await prisma.magicLinkToken.delete({ where: { id: row.id } });
+
+  // Set session cookie
+  const cookie = buildSessionCookie({ userId: row.userId });
 
   const res = NextResponse.json({ ok: true });
-  res.headers.set("Set-Cookie", sessionCookieHeader(cookieVal));
+  res.cookies.set(getSessionCookieName(), cookie.value, cookie.options);
   return res;
 }
