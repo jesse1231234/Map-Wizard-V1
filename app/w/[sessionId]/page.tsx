@@ -1,9 +1,9 @@
 // app/w/[sessionId]/page.tsx
 "use client";
 
-import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import WizardApp from "@/components/WizardApp";
 
 type SessionPayload = {
   ok?: boolean;
@@ -18,15 +18,6 @@ type SessionPayload = {
   feedback: any[];
   comments: any[];
 };
-
-const WizardApp = dynamic(() => import("@/components/WizardApp"), {
-  ssr: false,
-  loading: () => (
-    <main className="mx-auto max-w-3xl py-10">
-      <p className="text-sm text-neutral-600">Loading wizard UI…</p>
-    </main>
-  ),
-});
 
 export default function WizardPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -66,7 +57,7 @@ export default function WizardPage() {
 
   if (loading) {
     return (
-      <main className="mx-auto max-w-3xl py-10">
+      <main className="mx-auto max-w-4xl py-10">
         <p className="text-sm text-neutral-600">Loading wizard…</p>
       </main>
     );
@@ -74,7 +65,7 @@ export default function WizardPage() {
 
   if (error) {
     return (
-      <main className="mx-auto max-w-3xl py-10 space-y-4">
+      <main className="mx-auto max-w-4xl py-10 space-y-4">
         <p className="text-sm text-red-600">{error}</p>
         <button
           onClick={refresh}
@@ -89,12 +80,14 @@ export default function WizardPage() {
   if (!data) return null;
 
   return (
-    <WizardApp
-      session={data.session}
-      answers={data.answers}
-      feedback={data.feedback}
-      comments={data.comments}
-      onRefresh={refresh}
-    />
+    <div className="mx-auto max-w-4xl py-10">
+      <WizardApp
+        session={data.session}
+        answers={data.answers}
+        feedback={data.feedback}
+        comments={data.comments}
+        onRefresh={refresh}
+      />
+    </div>
   );
 }
