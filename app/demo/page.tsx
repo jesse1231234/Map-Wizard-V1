@@ -15,13 +15,30 @@ function mdToPlain(md?: string) {
 
 export default function DemoWizardPage() {
   const cfg = wizardConfigV1;
-  const steps = cfg.steps;
+  const steps = cfg.steps ?? [];
 
   const [stepIndex, setStepIndex] = useState(0);
   const [answersByStep, setAnswersByStep] = useState<Record<string, Answers>>({});
 
-  const step = steps[stepIndex];
+  // Clamp index to valid range
+  const safeIndex =
+    steps.length === 0 ? 0 : Math.min(Math.max(stepIndex, 0), steps.length - 1);
+
+  const step = steps[safeIndex];
+
+  // If no steps exist, show a clear message instead of crashing/TS error.
+  if (!step) {
+    return (
+      <main className="space-y-6">
+        <h1 className="text-2xl font-semibold">{cfg.title} — Demo Mode</h1>
+        <p className="text-sm text-neutral-700">
+          Wizard config has no steps. Check <code className="rounded bg-neutral-100 px-1">lib/wizard/config.ts</code>.
+        </p>
+      </main>
+    );
+  }
   const stepId = step.id;
+
 
   const stepAnswers: Answers = answersByStep[stepId] ?? {};
 
