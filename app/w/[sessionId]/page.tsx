@@ -92,11 +92,3 @@ export default function WizardPage() {
       */}
       {/* Example: */}
       {/* <WizardRuntime {...data} onSubmitSuccess={load} /> */}
-
-      {/* TEMP visibility while testing */}
-      <pre className="text-xs rounded-lg bg-neutral-100 p-4 overflow-auto">
-        {JSON.stringify(data, null, 2)}
-      </pre>
-    </main>
-  );
-}
