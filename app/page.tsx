@@ -82,6 +82,10 @@ export default function HomePage() {
           )}
         </p>
       </header>
+      
+      <a className="text-sm text-blue-700 underline" href="/demo">
+        Open demo wizard (no login)
+      </a>
 
       <section className="max-w-md space-y-4 rounded-xl border border-neutral-200 p-4">
         <h2 className="text-base font-medium">1) Email sign-in</h2>
