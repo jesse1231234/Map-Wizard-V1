@@ -5,13 +5,16 @@ import { getAuthedUserId } from "@/lib/authServer";
 
 export const runtime = "nodejs";
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
   const userId = await getAuthedUserId();
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const sessionId = params.id;
+  const { id: sessionId } = await params;
 
   const session = await prisma.session.findFirst({
     where: { id: sessionId, userId },
