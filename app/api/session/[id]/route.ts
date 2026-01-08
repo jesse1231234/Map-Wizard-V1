@@ -1,21 +1,17 @@
+// app/api/session/[id]/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthedUserId } from "@/lib/authServer";
 
 export const runtime = "nodejs";
 
-type Ctx = {
-  params: { id: string };
-};
-
-export async function GET(_req: Request, ctx: Ctx) {
-  // Auth (bypass-aware)
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const userId = await getAuthedUserId();
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const sessionId = ctx.params.id;
+  const sessionId = params.id;
 
   const session = await prisma.session.findFirst({
     where: { id: sessionId, userId },
@@ -26,9 +22,9 @@ export async function GET(_req: Request, ctx: Ctx) {
           id: true,
           stepId: true,
           questionId: true,
-          valueJson: true,
+          version: true,
+          value: true,
           createdAt: true,
-          updatedAt: true,
         },
       },
       feedback: {
@@ -36,9 +32,9 @@ export async function GET(_req: Request, ctx: Ctx) {
         select: {
           id: true,
           stepId: true,
-          kind: true,
-          severity: true,
-          message: true,
+          questionId: true,
+          verdict: true,
+          payload: true,
           createdAt: true,
         },
       },
@@ -47,7 +43,6 @@ export async function GET(_req: Request, ctx: Ctx) {
         select: {
           id: true,
           stepId: true,
-          questionId: true,
           body: true,
           createdAt: true,
         },
