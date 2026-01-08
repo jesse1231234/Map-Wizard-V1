@@ -1,34 +1,42 @@
+// app/api/submit/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthedUserId } from "@/lib/authServer";
-import { z } from "zod";
-
-// Adjust this import to whatever your repo uses for rubric evaluation
 import { evaluateStep } from "@/lib/llm/evaluator";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 
 const SubmitSchema = z.object({
   sessionId: z.string().min(1),
   stepId: z.string().min(1),
-
-  // answers: array so you can submit multiple questions at once
   answers: z
     .array(
       z.object({
         questionId: z.string().min(1),
-        valueJson: z.any(),
+        value: z.any(),
       })
     )
     .default([]),
-
-  // navigation intent
-  nextStepId: z.string().min(1).optional(),
-  markComplete: z.boolean().optional(),
 });
 
+type StepEvaluation = {
+  step_pass: boolean;
+  global_feedback: string[];
+  question_results: Array<{
+    question_id: string;
+    pass: boolean;
+    failed_checks: string[];
+    feedback: string[];
+    suggested_revision?: string;
+  }>;
+};
+
+function verdictFromEval(ev: StepEvaluation) {
+  return ev.step_pass ? "pass" : "fail";
+}
+
 export async function POST(req: Request) {
-  // Auth (bypass-aware)
   const userId = await getAuthedUserId();
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -43,130 +51,152 @@ export async function POST(req: Request) {
     );
   }
 
-  const { sessionId, stepId, answers, nextStepId, markComplete } = parsed.data;
+  const { sessionId, stepId, answers } = parsed.data;
 
   // Ensure session belongs to user
   const session = await prisma.session.findFirst({
     where: { id: sessionId, userId },
-    select: { id: true, wizardId: true, version: true, status: true, stepId: true },
+    select: { id: true, wizardId: true, version: true, stepId: true, status: true },
   });
 
   if (!session) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Upsert answers for this step
-  // (Your schema uses unique(sessionId, stepId, questionId) or similar; if not, adjust.)
-  await prisma.$transaction(
-    answers.map((a) =>
-      prisma.answer.upsert({
-        where: {
-          sessionId_stepId_questionId: {
-            sessionId,
-            stepId,
-            questionId: a.questionId,
-          },
-        },
-        update: { valueJson: a.valueJson },
-        create: {
-          sessionId,
-          stepId,
-          questionId: a.questionId,
-          valueJson: a.valueJson,
-        },
-      })
-    )
-  );
+  // Persist answers (append-only; UI reads latest by createdAt)
+  if (answers.length > 0) {
+    await prisma.answer.createMany({
+      data: answers.map((a) => ({
+        sessionId,
+        stepId,
+        questionId: a.questionId,
+        value: a.value,
+      })),
+    });
+  }
 
-  // Load rubric for gating (if any)
-  const rubric = await prisma.rubric.findFirst({
-    where: {
-      wizardId: session.wizardId,
-      version: session.version,
-      stepId,
-    },
-    select: { id: true, rubricJson: true },
+  // Load wizard config to find gate mode and next step
+  const cfg = await prisma.wizardConfig.findUnique({
+    where: { id: `${session.wizardId}:${session.version}` },
+    select: { json: true },
   });
 
-  // Clear prior feedback for this step (optional but usually desired)
+  if (!cfg) {
+    return NextResponse.json({ error: "Wizard config not found" }, { status: 500 });
+  }
+
+  const steps: any[] = Array.isArray((cfg.json as any)?.steps) ? (cfg.json as any).steps : [];
+  const currentIndex = steps.findIndex((s) => s?.id === stepId);
+  const currentStep = currentIndex >= 0 ? steps[currentIndex] : null;
+
+  const gateMode: "none" | "soft" | "hard" =
+    (currentStep?.gate?.mode as any) === "soft" || (currentStep?.gate?.mode as any) === "hard"
+      ? (currentStep.gate.mode as any)
+      : "none";
+
+  // Load rubric (if any) for this step
+  const rubricRow = await prisma.rubric.findFirst({
+    where: { wizardId: session.wizardId, version: session.version, stepId },
+    select: { json: true },
+  });
+
+  // Clear prior feedback for this step (keeps UI simple: latest payload matters)
   await prisma.feedback.deleteMany({ where: { sessionId, stepId } });
 
-  let evalResult: any = null;
+  // Default evaluation: if no gating/rubric, treat as pass
+  let evaluation: StepEvaluation = {
+    step_pass: true,
+    global_feedback: [],
+    question_results: [],
+  };
 
-  if (rubric) {
-    // Gather current answers for this step
+  if (gateMode !== "none" && rubricRow) {
+    // Pull latest answers for this step (one per question)
     const stepAnswers = await prisma.answer.findMany({
       where: { sessionId, stepId },
-      select: { questionId: true, valueJson: true },
+      orderBy: { createdAt: "desc" },
+      select: { questionId: true, value: true, createdAt: true },
     });
 
-    // Evaluate against rubric (may call LLM)
-    evalResult = await evaluateStep({
-      wizardId: session.wizardId,
-      version: session.version,
-      stepId,
-      rubric: rubric.rubricJson,
-      answers: stepAnswers,
-    });
-
-    // Persist feedback items if returned
-    const items = Array.isArray(evalResult?.items) ? evalResult.items : [];
-    if (items.length > 0) {
-      await prisma.feedback.createMany({
-        data: items.map((it: any) => ({
-          sessionId,
-          stepId,
-          kind: it.kind ?? "rubric",
-          severity: it.severity ?? "info",
-          message: it.message ?? "",
-        })),
-      });
+    const latestByQuestion = new Map<string, any>();
+    for (const a of stepAnswers) {
+      if (!latestByQuestion.has(a.questionId)) {
+        latestByQuestion.set(a.questionId, a.value);
+      }
     }
 
-    // Gate advancement if rubric says not pass
-    const passed = evalResult?.passed === true;
-
-    if (!passed) {
-      // Stay on same step; return feedback
-      const feedback = await prisma.feedback.findMany({
-        where: { sessionId, stepId },
-        orderBy: { createdAt: "asc" },
+    try {
+      evaluation = await evaluateStep({
+        stepId,
+        rubric: rubricRow.json,
+        answers: Array.from(latestByQuestion.entries()).map(([questionId, value]) => ({
+          questionId,
+          value,
+        })),
+        context: { wizardId: session.wizardId, version: session.version },
       });
-
-      return NextResponse.json({
-        ok: true,
-        gated: true,
-        passed: false,
-        nextStepId: stepId,
-        evaluation: evalResult,
-        feedback,
-      });
+    } catch (e: any) {
+      // Still persist a failure payload so the UI has something to show
+      evaluation = {
+        step_pass: false,
+        global_feedback: [
+          "Evaluation failed due to a server error. Check your OPENAI_API_KEY and server logs.",
+        ],
+        question_results: [],
+      };
     }
   }
 
-  // Passed (or no rubric) => advance/update session
-  const newStatus = markComplete ? "complete" : session.status;
-  const newStepId = markComplete ? session.stepId : (nextStepId ?? session.stepId);
-
-  await prisma.session.update({
-    where: { id: sessionId },
+  // Persist evaluation as a single Feedback row
+  await prisma.feedback.create({
     data: {
-      status: newStatus,
-      stepId: newStepId,
+      sessionId,
+      stepId,
+      questionId: null,
+      verdict: verdictFromEval(evaluation),
+      payload: evaluation as any,
     },
+    select: { id: true },
   });
 
-  const feedback = await prisma.feedback.findMany({
-    where: { sessionId, stepId },
-    orderBy: { createdAt: "asc" },
+  // Advance session step if passed OR if gate mode is none
+  let nextStepId: string | null = null;
+  let nextStatus: string | null = null;
+
+  const canAdvance = evaluation.step_pass || gateMode === "none" || !rubricRow;
+
+  if (canAdvance) {
+    const isLast = currentIndex >= 0 ? currentIndex >= steps.length - 1 : false;
+
+    if (isLast) {
+      nextStatus = "complete";
+      nextStepId = stepId; // keep last stepId
+    } else if (currentIndex >= 0) {
+      nextStepId = steps[currentIndex + 1]?.id ?? null;
+    }
+  } else {
+    nextStepId = stepId; // stay put
+  }
+
+  if (nextStepId || nextStatus) {
+    await prisma.session.update({
+      where: { id: sessionId },
+      data: {
+        stepId: nextStepId ?? session.stepId,
+        status: nextStatus ?? session.status,
+      },
+    });
+  }
+
+  // Return shape expected by the wizard page
+  const updated = await prisma.session.findUnique({
+    where: { id: sessionId },
+    select: { stepId: true, status: true },
   });
 
   return NextResponse.json({
     ok: true,
-    gated: false,
-    passed: true,
-    nextStepId: newStepId,
-    evaluation: evalResult,
-    feedback,
+    evaluation,
+    session: updated ?? { stepId: session.stepId, status: session.status },
   });
 }
