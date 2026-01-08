@@ -1,3 +1,4 @@
+// app/api/auth/request/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { RequestMagicLinkSchema } from "@/lib/validators";
@@ -12,6 +13,11 @@ function isTruthyEnv(v: string | undefined) {
 }
 
 export async function POST(req: Request) {
+  // Global bypass: pretend it worked, do nothing.
+  if (isTruthyEnv(process.env.AUTH_BYPASS)) {
+    return NextResponse.json({ ok: true, bypass: true });
+  }
+
   const json = await req.json().catch(() => null);
   const parsed = RequestMagicLinkSchema.safeParse(json);
 
@@ -49,7 +55,6 @@ export async function POST(req: Request) {
   const link = `${appUrl}/auth/verify?token=${encodeURIComponent(rawToken)}`;
 
   // Temporary dev bypass: return the magic link directly instead of sending email.
-  // Enable by setting MAGIC_LINK_DEV_BYPASS=true (or "1") in env.
   if (isTruthyEnv(process.env.MAGIC_LINK_DEV_BYPASS)) {
     console.log(`[MAGIC_LINK_DEV_BYPASS] ${email} -> ${link}`);
     return NextResponse.json({ ok: true, link, expiresAt });
