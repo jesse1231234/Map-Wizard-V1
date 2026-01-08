@@ -4,7 +4,7 @@ import { getAuthedUserId } from "@/lib/authServer";
 import { z } from "zod";
 
 // Adjust this import to whatever your repo uses for rubric evaluation
-import { evaluateStep } from "@/lib/llm/evaluate";
+import { evaluateStep } from "@/lib/llm/evaluator";
 
 export const runtime = "nodejs";
 
