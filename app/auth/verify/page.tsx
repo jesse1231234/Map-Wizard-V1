@@ -1,17 +1,7 @@
-import { Suspense } from "react";
-import VerifyClient from "./verify-client";
+// app/auth/verify/page.tsx
+import { redirect } from "next/navigation";
 
 export default function VerifyPage() {
-  return (
-    <Suspense
-      fallback={
-        <main className="space-y-6">
-          <h1 className="text-xl font-semibold">Signing you in…</h1>
-          <p className="text-sm text-neutral-700">Loading…</p>
-        </main>
-      }
-    >
-      <VerifyClient />
-    </Suspense>
-  );
+  // Ignore magic-link verification while testing full wizard flow
+  redirect("/start");
 }
