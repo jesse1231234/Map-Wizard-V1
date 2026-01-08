@@ -1,18 +1,14 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { parseSessionCookieValue, getSessionCookieName } from "@/lib/auth";
+import { getAuthedUserId } from "@/lib/authServer";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  const jar = await cookies();
-  const cookie = jar.get(getSessionCookieName())?.value;
+  const userId = await getAuthedUserId();
+  if (!userId) return NextResponse.json({ signedIn: false });
 
-  const auth = parseSessionCookieValue(cookie);
-  if (!auth) return NextResponse.json({ signedIn: false });
-
-  const user = await prisma.user.findUnique({ where: { id: auth.userId } });
+  const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return NextResponse.json({ signedIn: false });
 
   return NextResponse.json({
