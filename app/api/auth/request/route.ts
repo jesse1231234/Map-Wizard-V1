@@ -38,6 +38,13 @@ export async function POST(req: Request) {
   }
 
   const link = `${appUrl.replace(/\/$/, "")}/auth/verify?token=${encodeURIComponent(rawToken)}`;
+  // Temporary dev bypass: return the magic link directly instead of sending email.
+  // Enable by setting MAGIC_LINK_DEV_BYPASS=true (or "1") in env.
+  const bypass = (process.env.MAGIC_LINK_DEV_BYPASS || "").toLowerCase();
+  if (bypass === "1" || bypass === "true" || bypass === "yes") {
+    console.log(`[MAGIC_LINK_DEV_BYPASS] ${email} -> ${link}`);
+    return NextResponse.json({ ok: true, link });
+  }
   await sendMagicLinkEmail(email, link);
 
   return NextResponse.json({ ok: true });
