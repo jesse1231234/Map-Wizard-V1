@@ -1,58 +1,77 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { parseSessionCookieValue, getSessionCookieName } from "@/lib/auth";
+import { getAuthedUserId } from "@/lib/authServer";
 
 export const runtime = "nodejs";
 
-export async function GET(_req: Request, context: any) {
-  const jar = await cookies();
-  const cookie = jar.get(getSessionCookieName())?.value;
+type Ctx = {
+  params: { id: string };
+};
 
-  const auth = parseSessionCookieValue(cookie);
-  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const sessionId = context?.params?.id;
-  if (typeof sessionId !== "string" || sessionId.length < 5) {
-    return NextResponse.json({ error: "Invalid session id" }, { status: 400 });
+export async function GET(_req: Request, ctx: Ctx) {
+  // Auth (bypass-aware)
+  const userId = await getAuthedUserId();
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
+  const sessionId = ctx.params.id;
+
+  const session = await prisma.session.findFirst({
+    where: { id: sessionId, userId },
     include: {
-      answers: { orderBy: { createdAt: "desc" }, take: 200 },
-      feedback: { orderBy: { createdAt: "desc" }, take: 50 }
-    }
+      answers: {
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          stepId: true,
+          questionId: true,
+          valueJson: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      },
+      feedback: {
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          stepId: true,
+          kind: true,
+          severity: true,
+          message: true,
+          createdAt: true,
+        },
+      },
+      comments: {
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          stepId: true,
+          questionId: true,
+          body: true,
+          createdAt: true,
+        },
+      },
+    },
   });
 
-  if (!session || session.userId !== auth.userId) {
+  if (!session) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   return NextResponse.json({
+    ok: true,
     session: {
       id: session.id,
       wizardId: session.wizardId,
       version: session.version,
-      stepId: session.stepId,
       status: session.status,
+      stepId: session.stepId,
       createdAt: session.createdAt,
-      updatedAt: session.updatedAt
+      updatedAt: session.updatedAt,
     },
-    answers: session.answers.map((a) => ({
-      id: a.id,
-      stepId: a.stepId,
-      questionId: a.questionId,
-      value: a.value,
-      createdAt: a.createdAt
-    })),
-    feedback: session.feedback.map((f) => ({
-      id: f.id,
-      stepId: f.stepId,
-      questionId: f.questionId,
-      verdict: f.verdict,
-      payload: f.payload,
-      createdAt: f.createdAt
-    }))
+    answers: session.answers,
+    feedback: session.feedback,
+    comments: session.comments,
   });
 }
