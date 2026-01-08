@@ -1,39 +1,66 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
+
+type MeResponse =
+  | { signedIn: true; user: { email: string } }
+  | { signedIn: false; user?: { email: string } };
 
 export default function HomePage() {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
-  const [me, setMe] = useState<{ signedIn: boolean; user?: { email: string } } | null>(null);
+  const [me, setMe] = useState<MeResponse | null>(null);
+
+  // Dev bypass: if /api/auth/request returns { link }, show it here.
+  const [devLink, setDevLink] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadMe() {
-      const res = await fetch("/api/me");
-      const j = await res.json().catch(() => ({ signedIn: false }));
-      setMe(j);
+      try {
+        const res = await fetch("/api/me", { cache: "no-store" });
+        const j = (await res.json()) as MeResponse;
+        setMe(j);
+      } catch {
+        setMe({ signedIn: false });
+      }
     }
     loadMe();
   }, []);
 
   async function requestLink(e: React.FormEvent) {
     e.preventDefault();
+
     setStatus("sending");
     setError(null);
+    setDevLink(null);
 
-    const res = await fetch("/api/auth/request", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email })
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/auth/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+    } catch {
+      setError("Network error while requesting link.");
+      setStatus("error");
+      return;
+    }
+
+    // Always try to parse JSON; dev-bypass returns { ok: true, link }
+    // and error cases typically return { error }.
+    const j: any = await res.json().catch(() => ({}));
 
     if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
       setError(j?.error ?? "Failed to send link");
       setStatus("error");
       return;
+    }
+
+    if (typeof j?.link === "string" && j.link.length > 0) {
+      setDevLink(j.link);
     }
 
     setStatus("sent");
@@ -69,6 +96,7 @@ export default function HomePage() {
               placeholder="you@company.com"
               type="email"
               required
+              autoComplete="email"
             />
           </label>
 
@@ -81,11 +109,24 @@ export default function HomePage() {
           </button>
         </form>
 
-        {status === "sent" && (
+        {status === "sent" && !devLink && (
           <p className="text-sm text-neutral-700">Check your email for a sign-in link.</p>
         )}
 
-        {status === "error" && <p className="text-sm text-red-600">{error ?? "Something went wrong."}</p>}
+        {status === "sent" && devLink && (
+          <div className="space-y-2 rounded-md border border-yellow-300 bg-yellow-50 p-3">
+            <p className="text-sm text-neutral-800">
+              <span className="font-medium">Dev bypass is enabled.</span> Click this magic link to sign in:
+            </p>
+            <a className="block break-all text-sm text-blue-700 underline" href={devLink}>
+              {devLink}
+            </a>
+          </div>
+        )}
+
+        {status === "error" && (
+          <p className="text-sm text-red-600">{error ?? "Something went wrong."}</p>
+        )}
       </section>
 
       <section className="max-w-md space-y-3 rounded-xl border border-neutral-200 p-4">
